@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Scan Barcode & Rekap Data Bahan Baku</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    max-width: 900px;
+    margin: 20px auto;
+  }
+  h2 {
+    text-align: center;
+    color: #2c3e50;
+  }
+  #reader {
+    margin: 15px auto;
+    width: 320px;
+    border: 1px solid #ccc;
+    display: none;
+  }
+  #notification {
+    margin-top: 15px;
+    font-weight: bold;
+    min-height: 24px;
+    text-align: center;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 25px;
+  }
+  th, td {
+    border: 1px solid #ddd;
+    padding: 12px;
+    text-align: center;
+  }
+  th {
+    background-color: #f5f6fa;
+  }
+  .action-btn {
+    background-color: #e74c3c;
+    border: none;
+    color: white;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .action-btn:hover {
+    background-color: #c0392b;
+  }
+  .rekap {
+    display: flex;
+    justify-content: space-around;
+    margin-top: 20px;
+    padding: 15px;
+    background: #f7f9fa;
+    border-radius: 8px;
+  }
+  .rekap div {
+    font-weight: bold;
+    font-size: 18px;
+    padding: 15px 30px;
+    border-radius: 8px;
+    text-align: center;
+  }
+  .lulus { background: #d4efdf; color: #196f3d; }
+  .karantina { background: #fff9c4; color: #9a7d0a; }
+  .ditolak { background: #f8d7da; color: #721c24; }
+  #exportBtn, #cameraBtn {
+    margin-top: 15px;
+    padding: 12px 30px;
+    font-size: 16px;
+    cursor: pointer;
+    background-color: #2980b9;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    transition: background-color 0.3s ease;
+  }
+  #exportBtn:hover, #cameraBtn:hover {
+    background-color: #3498db;
+  }
+  #cameraBtn.active {
+    background-color: #27ae60;
+  }
+  #chartContainer {
+    margin-top: 40px;
+  }
+</style>
+</head>
+<body>
+
+<h2>Scan Barcode & Rekap Data Bahan Baku</h2>
+
+<button id="cameraBtn">📷 Aktifkan Kamera</button>
+<div id="reader"></div>
+<div id="notification"></div>
+<button id="exportBtn">Export Rekap ke Excel</button>
+
+<div class="rekap">
+  <div class="lulus" id="countLulus">Lulus: 0</div>
+  <div class="karantina" id="countKarantina">Karantina: 0</div>
+  <div class="ditolak" id="countDitolak">Ditolak: 0</div>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>Barcode (SKU)</th>
+      <th>Batch</th>
+      <th>Expiry</th>
+      <th>Lokasi</th>
+      <th>Status</th>
+      <th>Waktu Scan</th>
+      <th>Aksi</th>
+    </tr>
+  </thead>
+  <tbody id="dataTableBody"></tbody>
+</table>
+
+<div id="chartContainer">
+  <canvas id="statusChart" width="400" height="250"></canvas>
+</div>
+
+<!-- Dependencies -->
+<script src="https://unpkg.com/html5-qrcode@2.3.8/minified/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+<script>
+  const cameraBtn = document.getElementById('cameraBtn');
+  const readerElem = document.getElementById('reader');
+  const notification = document.getElementById('notification');
+  const exportBtn = document.getElementById('exportBtn');
+  const dataTableBody = document.getElementById('dataTableBody');
+  const countLulus = document.getElementById('countLulus');
+  const countKarantina = document.getElementById('countKarantina');
+  const countDitolak = document.getElementById('countDitolak');
+
+  let html5QrCode = null;
+  let scannerRunning = false;
+  let dataEntries = JSON.parse(localStorage.getItem('pengadaanData')) || [];
+  let statusChart = null;
+
+  function showNotification(msg, color = 'green') {
+    notification.textContent = msg;
+    notification.style.color = color;
+    setTimeout(() => notification.textContent = '', 4000);
+  }
+
+  function renderTable() {
+    dataTableBody.innerHTML = '';
+    if(dataEntries.length === 0){
+      dataTableBody.innerHTML = `<tr><td colspan="7" style="color:#888;">Data masih kosong</td></tr>`;
+      updateRekap();
+      updateChart();
+      return;
+    }
+    dataEntries.forEach((entry, idx) => {
+      const tr = document.createElement('tr');
+      tr.className = 'status-' + entry.status.toLowerCase();
+      tr.innerHTML = `
+        <td>${entry.barcode}</td>
+        <td>${entry.batch}</td>
+        <td>${entry.expiry || '-'}</td>
+        <td>${entry.location || '-'}</td>
+        <td>${entry.status}</td>
+        <td>${new Date(entry.timestamp).toLocaleString()}</td>
+        <td><button class="action-btn" onclick="deleteEntry(${idx})">Hapus</button></td>
+      `;
+      dataTableBody.appendChild(tr);
+    });
+    updateRekap();
+    updateChart();
+  }
+
+  function updateRekap() {
+    const count = { Lulus: 0, Karantina: 0, Ditolak: 0 };
+    dataEntries.forEach(e => {
+      if(e.status in count) count[e.status]++;
+    });
+    countLulus.textContent = `Lulus: ${count.Lulus}`;
+    countKarantina.textContent = `Karantina: ${count.Karantina}`;
+    countDitolak.textContent = `Ditolak: ${count.Ditolak}`;
+  }
+
+  function deleteEntry(idx) {
+    if(confirm('Yakin ingin menghapus data ini?')){
+      dataEntries.splice(idx,1);
+      saveData();
+      showNotification('Data berhasil dihapus', 'red');
+    }
+  }
+
+  function saveData() {
+    localStorage.setItem('pengadaanData', JSON.stringify(dataEntries));
+    renderTable();
+  }
+
+  function updateChart() {
+    const count = { Lulus: 0, Karantina: 0, Ditolak: 0 };
+    dataEntries.forEach(e => {
+      if(e.status in count) count[e.status]++;
+    });
+    const ctx = document.getElementById('statusChart').getContext('2d');
+    if(statusChart) statusChart.destroy();
+    statusChart = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: ['Lulus', 'Karantina', 'Ditolak'],
+        datasets: [{
+          data: [count.Lulus, count.Karantina, count.Ditolak],
+          backgroundColor: ['#196f3d', '#9a7d0a', '#721c24'],
+          borderColor: ['#d4efdf', '#fff9c4', '#f8d7da'],
+          borderWidth: 2
+        }]
+      },
+      options: {
+        responsive:true,
+        plugins: { legend: { position: 'bottom' } }
+      }
+    });
+  }
+
+  function processScannedData(decodedText) {
+    const parts = decodedText.split('|').map(s => s.trim());
+    if(parts.length !== 5){
+      showNotification('Format barcode tidak valid! Harus SKU|Batch|Expiry|Location|Status', 'red');
+      return;
+    }
+    const [barcode,batch,expiry,location,status] = parts;
+    const validStatuses = ['Lulus', 'Karantina', 'Ditolak'];
+    if(!validStatuses.includes(status)){
+      showNotification(`Status "${status}" tidak valid!`, 'red');
+      return;
+    }
+    const idx = dataEntries.findIndex(e => e.barcode === barcode && e.batch === batch);
+    if(idx !== -1){
+      dataEntries[idx] = { barcode,batch,expiry,location,status, timestamp: Date.now() };
+      showNotification(`Data diperbarui: ${barcode}`);
+    } else {
+      dataEntries.push({ barcode,batch,expiry,location,status, timestamp: Date.now() });
+      showNotification(`Data ditambahkan: ${barcode}`);
+    }
+    saveData();
+  }
+
+  function startScanner() {
+    if(!html5QrCode){
+      html5QrCode = new Html5Qrcode("reader");
+    }
+    html5QrCode.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: 250 },
+      decodedText => {
+        processScannedData(decodedText);
+      },
+      errorMessage => {
+        // Ignore scan errors
+      }
+    ).then(() => {
+      scannerRunning = true;
+      readerElem.style.display = 'block';
+      cameraBtn.classList.add('active');
+      cameraBtn.textContent = '📷 Kamera Aktif (Klik untuk Matikan)';
+    }).catch(err => {
+      showNotification('Gagal akses kamera: ' + err, 'red');
+    });
+  }
+
+  function stopScanner() {
+    if(html5QrCode){
+      html5QrCode.stop().then(() => {
+        scannerRunning = false;
+        readerElem.style.display = 'none';
+        cameraBtn.classList.remove('active');
+        cameraBtn.textContent = '📷 Kamera Mati (Klik untuk Aktifkan)';
+      }).catch(() => {
+        showNotification('Gagal mematikan kamera', 'red');
+      });
+    }
+  }
+
+  let scannerRunning = false;
+  cameraBtn.addEventListener('click', () => {
+    if(scannerRunning){
+      stopScanner();
+    } else {
+      startScanner();
+    }
+  });
+
+  exportBtn.addEventListener('click', () => {
+    if(dataEntries.length === 0){
+      alert('Tidak ada data untuk diekspor.');
+      return;
+    }
+    const worksheetData = dataEntries.map(e => ({
+      Barcode: e.barcode,
+      Batch: e.batch,
+      Expiry: e.expiry,
+      Lokasi: e.location,
+      Status: e.status,
+      'Waktu Scan': new Date(e.timestamp).toLocaleString()
+    }));
+    const ws = XLSX.utils.json_to_sheet(worksheetData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Pengadaan Bahan");
+    XLSX.writeFile(wb, "Rekap_Pengadaan_Bahan_Baku.xlsx");
+  });
+
+  // Init render data dan grafik
+  renderTable();
+  updateChart();
+  cameraBtn.textContent = '📷 Kamera Mati (Klik untuk Aktifkan)';
+</script>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/minified/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+</body>
+</html>
